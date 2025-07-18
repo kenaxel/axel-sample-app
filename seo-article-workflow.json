@@ -1,0 +1,430 @@
+{
+  "name": "SEO記事自動作成ワークフロー",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "スケジュール実行",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": "=YOUR_SPREADSHEET_ID",
+        "sheetName": "キーワード",
+        "range": "A:B",
+        "options": {
+          "valueInputOption": "RAW"
+        }
+      },
+      "id": "google-sheets-read",
+      "name": "スプレッドシート読み込み",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// キーワードデータを処理\nconst items = [];\nconst rows = $input.all();\n\n// ヘッダー行をスキップして処理\nfor (let i = 1; i < rows.length; i++) {\n  const row = rows[i];\n  if (row.json && row.json.A) {\n    items.push({\n      json: {\n        keyword: row.json.A,\n        category: row.json.B || 'その他',\n        index: i\n      }\n    });\n  }\n}\n\nreturn items;"
+      },
+      "id": "process-keywords",
+      "name": "キーワード処理",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "chatId": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "あなたは経験豊富なSEOライターです。与えられたキーワードに基づいて、検索エンジンで上位表示される高品質な記事を作成してください。記事は以下の要素を含む必要があります：\n\n1. 魅力的なタイトル（キーワードを含む）\n2. メタディスクリプション（160文字以内）\n3. 構造化された見出し（H1, H2, H3）\n4. 読みやすい本文（2000文字以上）\n5. 内部リンクの提案\n6. 画像の説明（alt属性用）\n\n記事はJSON形式で返してください：\n{\n  \"title\": \"記事タイトル\",\n  \"meta_description\": \"メタディスクリプション\",\n  \"content\": \"HTML形式の記事本文\",\n  \"image_description\": \"メイン画像の説明\",\n  \"tags\": [\"タグ1\", \"タグ2\", \"タグ3\"]\n}"
+            },
+            {
+              "role": "user",
+              "content": "=キーワード: {{ $json.keyword }}\nカテゴリ: {{ $json.category }}\n\n上記のキーワードに基づいて、SEO最適化された記事を作成してください。"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 3000
+        }
+      },
+      "id": "openai-article",
+      "name": "SEO記事作成",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// OpenAIの応答を解析\nconst response = $input.first().json.choices[0].message.content;\nlet articleData;\n\ntry {\n  // JSON部分を抽出\n  const jsonMatch = response.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    articleData = JSON.parse(jsonMatch[0]);\n  } else {\n    throw new Error('JSON形式が見つかりません');\n  }\n} catch (error) {\n  // JSONの解析に失敗した場合のフォールバック\n  articleData = {\n    title: `${$('process-keywords').first().json.keyword}に関する記事`,\n    meta_description: `${$('process-keywords').first().json.keyword}について詳しく解説します。`,\n    content: response,\n    image_description: `${$('process-keywords').first().json.keyword}に関連する画像`,\n    tags: [$('process-keywords').first().json.keyword, $('process-keywords').first().json.category]\n  };\n}\n\nreturn [{\n  json: {\n    ...articleData,\n    keyword: $('process-keywords').first().json.keyword,\n    category: $('process-keywords').first().json.category\n  }\n}];"
+      },
+      "id": "parse-article",
+      "name": "記事データ解析",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "create",
+        "prompt": "={{ $json.image_description }}. 高品質、プロフェッショナル、ブログ記事用の画像。明るく魅力的な色合い。",
+        "options": {
+          "size": "1024x1024",
+          "quality": "hd",
+          "style": "vivid"
+        }
+      },
+      "id": "dalle-image",
+      "name": "画像生成",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.data[0].url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "download-image",
+      "name": "画像ダウンロード",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "media",
+        "operation": "upload",
+        "binaryData": true,
+        "additionalFields": {
+          "title": "={{ $('parse-article').first().json.title }}",
+          "altText": "={{ $('parse-article').first().json.image_description }}",
+          "description": "={{ $('parse-article').first().json.image_description }}"
+        }
+      },
+      "id": "wordpress-upload-image",
+      "name": "WordPress画像アップロード",
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "post",
+        "operation": "create",
+        "title": "={{ $('parse-article').first().json.title }}",
+        "content": "={{ $('parse-article').first().json.content }}",
+        "additionalFields": {
+          "status": "draft",
+          "excerpt": "={{ $('parse-article').first().json.meta_description }}",
+          "featuredMediaId": "={{ $json.id }}",
+          "tags": "={{ $('parse-article').first().json.tags.join(',') }}",
+          "metaFields": {
+            "metaFieldsValues": [
+              {
+                "key": "meta_description",
+                "value": "={{ $('parse-article').first().json.meta_description }}"
+              },
+              {
+                "key": "focus_keyword",
+                "value": "={{ $('parse-article').first().json.keyword }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "wordpress-create-post",
+      "name": "WordPress記事作成",
+      "type": "n8n-nodes-base.wordpress",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "update",
+        "documentId": "=YOUR_SPREADSHEET_ID",
+        "sheetName": "キーワード",
+        "range": "=`C${$('process-keywords').first().json.index + 1}`",
+        "options": {
+          "valueInputOption": "RAW"
+        },
+        "dataToSend": "defineInNode",
+        "valueToSend": "={{ new Date().toISOString().split('T')[0] }}"
+      },
+      "id": "update-spreadsheet",
+      "name": "スプレッドシート更新",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        2220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "success-check",
+      "name": "成功チェック",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@yoursite.com",
+        "toEmail": "admin@yoursite.com",
+        "subject": "SEO記事作成完了通知",
+        "text": "=新しいSEO記事が作成されました：\n\nタイトル: {{ $('parse-article').first().json.title }}\nキーワード: {{ $('parse-article').first().json.keyword }}\nWordPress投稿ID: {{ $('wordpress-create-post').first().json.id }}\n\n記事は下書きとして保存されています。確認後に公開してください。",
+        "options": {}
+      },
+      "id": "send-notification",
+      "name": "完了通知",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@yoursite.com",
+        "toEmail": "admin@yoursite.com",
+        "subject": "SEO記事作成エラー通知",
+        "text": "=SEO記事作成中にエラーが発生しました：\n\nキーワード: {{ $('process-keywords').first().json.keyword }}\nエラー内容: {{ $json.error }}\n\n手動で確認してください。",
+        "options": {}
+      },
+      "id": "send-error-notification",
+      "name": "エラー通知",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "スケジュール実行": {
+      "main": [
+        [
+          {
+            "node": "スプレッドシート読み込み",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "スプレッドシート読み込み": {
+      "main": [
+        [
+          {
+            "node": "キーワード処理",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "キーワード処理": {
+      "main": [
+        [
+          {
+            "node": "SEO記事作成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SEO記事作成": {
+      "main": [
+        [
+          {
+            "node": "記事データ解析",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "記事データ解析": {
+      "main": [
+        [
+          {
+            "node": "画像生成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "画像生成": {
+      "main": [
+        [
+          {
+            "node": "画像ダウンロード",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "画像ダウンロード": {
+      "main": [
+        [
+          {
+            "node": "WordPress画像アップロード",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WordPress画像アップロード": {
+      "main": [
+        [
+          {
+            "node": "WordPress記事作成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WordPress記事作成": {
+      "main": [
+        [
+          {
+            "node": "スプレッドシート更新",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "スプレッドシート更新": {
+      "main": [
+        [
+          {
+            "node": "成功チェック",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "成功チェック": {
+      "main": [
+        [
+          {
+            "node": "完了通知",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "エラー通知",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "seo-automation",
+      "name": "SEO自動化"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
